@@ -120,6 +120,9 @@ void lowRank(int w, int h, double *in, double *out)
     double *newx = dmalloc(w * h);
     double *cpyx = dmalloc(w * h);
     double *win = dmalloc(w * h);
+    double *Ax = dmalloc(w * h);
+    double *lhat = dmalloc(w * h);
+    double *uhat = dmalloc(w * h);
 
     // y <- JPEGDCT係数
     ibdct(w, h, in, y);
@@ -145,8 +148,8 @@ void lowRank(int w, int h, double *in, double *out)
     //sdot = (double)(Mq[0] + Mq[1] + Mq[2] + Mq[8] + Mq[9] + Mq[10] + Mq[16] + Mq[17] + Mq[18]) / 9.0;
     //simgae = 1.195 * pow(sdot, 0.6394) + 0.9693;
 
-    getL(w, h, in, 0.25);
-    getU(w, h, in, 0.25);
+    getL(w, h, in, lhat, 0.25);
+    getU(w, h, in, uhat, 0.25);
 
     const int rtPs = (int)sqrt((double)Ps);
     const int stp = rtPs - S;
@@ -163,6 +166,7 @@ void lowRank(int w, int h, double *in, double *out)
     double *cpyXGi = dmalloc(Ps * K);
     double *tmpXGi = dmalloc(Ps * K);
     double *tmps = dmalloc(Ps * K);
+    
 
     // SVD preliminary
     int info, lwork;
@@ -378,6 +382,37 @@ void lowRank(int w, int h, double *in, double *out)
             for(i = 0 ; i < w * h ; i++){
                 x[i] = newx[i] / win[i];
             }
+        } // l
+        bdct(w, h, x, Ax);
+        for(i = 0 ; i < w ; i++){
+            Ax[i] = MAX(MIN(Ax[i], uhat[i]), lhat[i]);
         }
+        ibdct(w, h, Ax, x);
     }
+    memcpy(out, x, sizeof(double) * w * h);
+    free(y);
+    free(x);
+    free(lhat);
+    free(uhat);
+    free(Ax);
+    free(newx);
+    free(cpyx);
+    free(tmpx);
+    free(win);
+    free(Gk);
+    free(chk);
+    free(err);
+    free(ref);
+    free(tgt);
+    free(XGk);
+    free(ZGk);
+    free(cpyZGk);
+    free(tmpZGk);
+    free(wgt);
+    free(us);
+    free(tmps);
+    free(s);
+    free(u);
+    free(vt);
+    free(work);
 }
