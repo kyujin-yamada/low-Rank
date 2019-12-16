@@ -117,7 +117,6 @@ void lowRank(int w, int h, double *in, double *out)
 
     double *y = dmalloc(w * h);  // JPEG DCT係数
     double *x = dmalloc(w * h);  // JPEG 
-    double *Ax = dmalloc(w * h);
     double *newx = dmalloc(w * h);
     double *cpyx = dmalloc(w * h);
     double *win = dmalloc(w * h);
@@ -163,7 +162,7 @@ void lowRank(int w, int h, double *in, double *out)
     double *XGi = dmalloc(Ps * K);   // 元ZGk
     double *cpyXGi = dmalloc(Ps * K);
     double *tmpXGi = dmalloc(Ps * K);
-    double *tmpx = dmalloc(Ps * K);
+    double *tmps = dmalloc(Ps * K);
 
     // SVD preliminary
     int info, lwork;
@@ -286,7 +285,7 @@ void lowRank(int w, int h, double *in, double *out)
                 for(j = 0 ; j < Ps ; j++){
                     tmp += wGi[imgAcc(j0/stp, i0/stp, j, nj, ni, Ps)] * Sigma_nGi[imgAcc3(j0/stp, i0/stp, j, nj, ni, Ps)];
                 }
-                simga_nGi[imgAcc2(j0/stp, i0/stp, nj, n)] = tmp;
+                simga_nGi[imgAcc2(j0/stp, i0/stp, nj, ni)] = tmp;
             } // i0
         } //j0
 
@@ -321,42 +320,63 @@ void lowRank(int w, int h, double *in, double *out)
                         _sigmas += (YGi[i] - XGi[i]) * (YGi[i] - XGi[i]);
                     }
                     memcpy(tmpXGi, XGi, sizeof(double) * Ps * K);
-                    // u -> sigma?
+                    // s -> sigma
                     dgesvd("All", "All", &Ps, &K, tmpXGi, &Ps, s, u, &Ps, vt, &K, work, &lwork, &info);
+                    
+                    // soft threshold => 
                     simga2_nGi[imgAcc2(j0/stp, i0/stp, nj, ni)] = sigma_nGi[imgAcc2(j0/stp, i0/stp, nj, ni)] * sigma_nGi[imgAcc2(j0/stp, i0/stp, nj, ni)];
 
+                    // λ 
+                    for(i = 0 ; i < Ps ; i++){
+                        lambda_kGi[i] = s[i];
+                    }
                     // equ(14)
-                    lambda_kGi[imgAcc2(j0/stp, i0/stp, nj, ni)] = sqrt(u[imgAcc2(j0/stp, i0/stp, nj, ni) - sigma2_nGi[imgAcc2(j0/stp, i0/stp, nj, ni)]);
+                    for(i = 0 ;  i < Ps ; i++){
+                        lambda_dash[i] = sqrt(lambda_kGi[i] - sigma2[imgAcc2(j0/stp, i0/stp, nj, ni)]);
+                    }
                     // equ(13)
-                    tau_kGi[imgAcc2(j0/stp, i0/stp, nj, ni)] = gamma * sigma_nGi[imgAcc2(j0/stp, i0/stp, nj, ni)] / sqrt(lambda_kGi[imgAcc2(j0/stp, i0/stp, nj, ni)]);
+                    for(i = 0 ; i < Ps ; i++){
+                        tau_kGi[i] = gamma * sigma2_nGi[imgAcc2(j0/stp, i0/stp, nj, ni)] / sqrt(lambda_dash[i]);
+                    }
                     // equ(12)
-                    if( abs(lambda_kGi[imgAcc2(j0/stp, i0/stp, nj, ni)]) > tau_kGi[imgAcc(j0/stp, i0/stp, nj, ni)])
-                    Dtau[imgAcc2(j0/stp, i0/stp, nj, ni)] = lambda_kGi[imgAcc2(j0/stp, i0/stp, nj, ni)] - tau[];
-                    else if(abs(lambda_kGi[imgAcc2(j0/stp, i0/stp, nj, ni)]) > tau_kGi[imgAcc(j0/stp, i0/stp, nj, ni)])
-                    Dtau[imgAcc2(j0/stp, i0/stp, nj, ni)] = 0;
-                    /*
-                    for(j = 0 ;  j < Ps ; j++){
-                        Xhat_Gi[j0/stp, i0/stp, j, nj, ni, Ps] =  
-                    }*/
-                    for(j = 0 ; j < Ps ; j++){
-                        for(i = 0 ; i < Ps ; i++){
-                            us[K * j + i] = u[Ps * i + j] * Dtau * ]];
+                    for(i = 0 ; i < Ps ; i++){
+                        if(abs(lambda[i]) > tau_kGi[i]){
+                            tmps[i] = lambda[i] - tau_kGi[i] * 1;
+                        }else if(abs(lambda[i]) <= tau_kGi[i]){
+                            tmps[i] = 0;
                         }
                     }
-                    // U * D * Vt equ(9)
-                    
-                    
-                } // j0
-            } // i0
-            M = min(Ps, K);
-            omega_B = max(1 - r / M, 1/M) / Z;
 
-            // 
-            // equ(15) 重なった部分の重みづけ平均
-            for(j0 = 2 ; j0 < h - 2 ; j0 += stp){
-                for(i0 = 2 ; i0 < w - 2; i0 += stp){
+                    // パッチの再構成 U * D * Vt equ(9)
+                    memset(us, 0, sizeof(double) * Ps * K);
+                    memset(XGk, 0, sizeof(double) * Ps * K);
                     
-                }
+                    for(j = 0 ; j < Ps ; j++){
+                        for(i = 0 ; i < Ps ; i++){
+                            us[imgAcc2(j, i, K, K)] = u[imgAcc(i, j, Ps, Ps)] * tmps[i];
+                        }
+                    }
+
+                    for(j = 0 ; j < Ps ; j++){
+                        for(i = 0 ; i < K ; i++){
+                            for(n = 0 ; n < K ; n++){
+                                XGk[Ps * i + j] += us[Ps * j + n] * vt[c * i + n];
+                            }
+                        }
+                    }
+                    // (15)
+                    for(j = 0 ; j < rtPs ; j++){
+                        for(i = 0 ; i < rtPs ; i++){
+                            newx[(j0 + j) % h * w + (i0 + i) % w] += XGk[rtPs * j + i];
+                            win[(j0 + j)%h * w + (i0 + i) % w]++;
+                        }
+                    }
+                } // j0
+            // } // i0
+            // M = min(Ps, K);
+            // omega_B = max(1 - r / M, 1/M) / Z;
+            for(i = 0 ; i < w * h ; i++){
+                x[i] = newx[i] / win[i];
             }
         }
     }
