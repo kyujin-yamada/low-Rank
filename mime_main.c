@@ -1,3 +1,8 @@
+/*
+   Low-Rank Decomposition-Based Restoration of
+   Compressed Images via Adaptive Noise Estimation
+*/
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -123,6 +128,8 @@ void lowRank(int w, int h, double *in, double *out)
     double *Ax = dmalloc(w * h);
     double *lhat = dmalloc(w * h);
     double *uhat = dmalloc(w * h);
+    double *tmpx = (double *)malloc(sizeof(double) * w * h);
+  
 
     // y <- JPEGDCT係数
     ibdct(w, h, in, y);
@@ -135,6 +142,8 @@ void lowRank(int w, int h, double *in, double *out)
     const int T = 5;
     const int L = 7;
     const int S = 3;   // over lapping length
+    const double alpha = 0.1;
+    const double gamma;
 
     if(Ps > K || K > Ws * Ws || S < 0){
         fprintf(stderr, "error : invalid parameter value\n");
@@ -156,16 +165,28 @@ void lowRank(int w, int h, double *in, double *out)
     for(i0 = 0 , ni = 0 ; i0 < w ; i0 += stp, ni++);
     for(j0 = 0 , nj = 0 ; j0 < h ; j0 += stp, nj++);
     
-    int *Gi = imalloc(K * ni * nj); 
-    int *chk = imalloc(Ws * Ws);
-    double *err = dmalloc(Ws * Ws);
-    double *ref = dmalloc(Ps);
-    double *tgt = dmalloc(Ps);
-    double *YGi = dmalloc(Ps * K);   // 元Xgi
-    double *XGi = dmalloc(Ps * K);   // 元ZGk
-    double *cpyXGi = dmalloc(Ps * K);
-    double *tmpXGi = dmalloc(Ps * K);
-    double *tmps = dmalloc(Ps * K);
+    int *Gi   = imalloc(K * ni * nj);     // Ng（ブロックマッチング後の上位K個）
+    int *chk  = imalloc(Ws * Ws);
+    double *err       = dmalloc(Ws * Ws);
+    double *ref       = dmalloc(Ps);
+    double *tgt       = dmalloc(Ps);
+    double *YGi       = dmalloc(Ps * K);     // 元XGi equ.(4)
+    double *XGi       = dmalloc(Ps * K);     // 元ZGk
+    double *cpyXGi    = dmalloc(Ps * K);
+    double *tmpXGi    = dmalloc(Ps * K);
+    double *ph        = dmalloc(ni * nj);    // equ.(27)
+    double *pv        = dmalloc(ni * nj);    // equ.(28)
+    double *mu        = dmalooc(ni * nj);    // equ.(29)
+    double *sigma_xGi = dmalloc(ni * nj);    // equ.(30)
+    double *sigma_nGi = dmalloc(ni * nj);    // equ.(33)
+    double *sigma2_nGi= dmalloc(ni * nj);    // σ_n^2
+    double *omega_Gi  = dmalloc(ni * nj * Ps);  // equ.(34)
+    double *S2        = dmalloc(ni * nj);    //    equ.(34)
+    double *lambda    = dmalloc(Ps);
+    double *lambda_kGi = dmalloc(Ps);
+    double *lambda_dash= dmalloc(Ps);
+    double *tau_kGi    = dmalloc(Ps);
+
     
 
     // SVD preliminary
@@ -174,7 +195,9 @@ void lowRank(int w, int h, double *in, double *out)
     double *s = dmalloc(Ps);
     double *u = dmalloc(Ps * Ps);
     double *vt = dmalloc(K * K);
-
+    double *us = dmalloc(Ps * K);   // u * s
+    double *tmps = dmalloc(Ps * K); // temporary s
+     
     lwork = -1;
     dgesvd("All", "All", &Ps, &K, YGi, &Ps, s, u, &Ps, vt, &K, &wkopt, &lwork, &info);
     lwork = (int)wkopt;
@@ -238,7 +261,7 @@ void lowRank(int w, int h, double *in, double *out)
                         tmpYGi += Gi[imgAcc4(j0/stp, i0/stp, j, n, nj, ni, Ps, n)];
                     }   
                 // y_bar
-                YGi[imgAcc3(j0/stp, i0/stp, j, nj, ni, Ps)] = tmpYGi/K;
+                YGi[imgAcc3(j0/stp, i0/stp, j, nj, ni, Ps)] = tmpYGi/ (double)K;
                 }
 
                 // μ ph, pv 式(27), (28)
@@ -252,14 +275,14 @@ void lowRank(int w, int h, double *in, double *out)
                 double phNumerator = 0; 
                 double pvNumerator = 0;
                 double Denominator = 0;
-                double ph = 0, pv = 0;
+               
                 for(j = 0 ; j < rtPs ; j++){
                     for(i = 0 ; i < rtPs ; i++){
                         tmp1 = YGi[imgAcc4(j0/stp, i0/stp, j, i, nj, ni, rtPs, rtPs)] - mu[imgAcc2(j0/stp, i0/stp, nj, ni)];
                         phNumerator += (YGi[imgAcc4(j0/stp, i0/stp, j, (i+1)%rtPs, nj, ni, rtPs, rtPs)] 
                                         - mu[imgAcc2(j0/stp, i0/stp, nj, ni)])*(tmp1);
                         pvNumerator += (YGi[imgAcc4(j0/stp, i0/stp, (j+1)%rtPs, i, nj, ni, rtPs, rtPs)] 
-                                        - mu[imgAcc2(j0/stp, i0/stp, nj, ni)])*(tmp);
+                                        - mu[imgAcc2(j0/stp, i0/stp, nj, ni)])*(tmp1);
                         Denominator += tmp1 * tmp1;
                     }
                 }
@@ -272,24 +295,24 @@ void lowRank(int w, int h, double *in, double *out)
                     tmp2 += tmp1 * tmp1;
                 }
 
-                sigmaxGi[imgAcc2(j0/stp, i0/stp, nj, ni)] = alpha * sqrt(tmp2);
+                sigma_xGi[imgAcc2(j0/stp, i0/stp, nj, ni)] = alpha * sqrt(tmp2);
 
                 // equ(31), (32)保留
                 // equ(33), (34)
-                tmp = 0; 
+                tmp1 = 0; 
                 for(j = 0 ; j < Ps ; j++){
-                    tmp += Sigma_nGi[imgAcc3(j0/stp, i0/stp, j, nj, ni, Ps)];
+                    tmp1 += Sigma_nGi[imgAcc3(j0/stp, i0/stp, j, nj, ni, Ps)];
                 }
-                S[imgAcc2(j0/stp, i0/stp, nj, ni)] = tmp;
+                S2[imgAcc2(j0/stp, i0/stp, nj, ni)] = tmp1;
                 for(j = 0 ; j < Ps : j++){
-                    wGi[imgAcc(j0/stp, i0/stp, j, nj, ni, Ps)] = Sigma_nGi[imgAcc3(j0/stp, i0/stp, j, nj, ni, Ps)] / S;
+                    omega_Gi[imgAcc(j0/stp, i0/stp, j, nj, ni, Ps)] = Sigma_nGi[imgAcc3(j0/stp, i0/stp, j, nj, ni, Ps)] / S;
                 }
                 // (33)
-                tmp = 0;
+                tmp1 = 0;
                 for(j = 0 ; j < Ps ; j++){
-                    tmp += wGi[imgAcc(j0/stp, i0/stp, j, nj, ni, Ps)] * Sigma_nGi[imgAcc3(j0/stp, i0/stp, j, nj, ni, Ps)];
+                    tmp1 += omega_Gi[imgAcc(j0/stp, i0/stp, j, nj, ni, Ps)] * Sigma_nGi[imgAcc3(j0/stp, i0/stp, j, nj, ni, Ps)];
                 }
-                simga_nGi[imgAcc2(j0/stp, i0/stp, nj, ni)] = tmp;
+                sigma_nGi[imgAcc2(j0/stp, i0/stp, nj, ni)] = tmp1;
             } // i0
         } //j0
 
@@ -328,7 +351,7 @@ void lowRank(int w, int h, double *in, double *out)
                     dgesvd("All", "All", &Ps, &K, tmpXGi, &Ps, s, u, &Ps, vt, &K, work, &lwork, &info);
                     
                     // soft threshold => 
-                    simga2_nGi[imgAcc2(j0/stp, i0/stp, nj, ni)] = sigma_nGi[imgAcc2(j0/stp, i0/stp, nj, ni)] * sigma_nGi[imgAcc2(j0/stp, i0/stp, nj, ni)];
+                    sigma2_nGi[imgAcc2(j0/stp, i0/stp, nj, ni)] = sigma_nGi[imgAcc2(j0/stp, i0/stp, nj, ni)] * sigma_nGi[imgAcc2(j0/stp, i0/stp, nj, ni)];
 
                     // λ 
                     for(i = 0 ; i < Ps ; i++){
@@ -336,7 +359,7 @@ void lowRank(int w, int h, double *in, double *out)
                     }
                     // equ(14)
                     for(i = 0 ;  i < Ps ; i++){
-                        lambda_dash[i] = sqrt(lambda_kGi[i] - sigma2[imgAcc2(j0/stp, i0/stp, nj, ni)]);
+                        lambda_dash[i] = sqrt(lambda_kGi[i] - sigma2_nGi[imgAcc2(j0/stp, i0/stp, nj, ni)]);
                     }
                     // equ(13)
                     for(i = 0 ; i < Ps ; i++){
@@ -353,7 +376,7 @@ void lowRank(int w, int h, double *in, double *out)
 
                     // パッチの再構成 U * D * Vt equ(9)
                     memset(us, 0, sizeof(double) * Ps * K);
-                    memset(XGk, 0, sizeof(double) * Ps * K);
+                    memset(XGi, 0, sizeof(double) * Ps * K);
                     
                     for(j = 0 ; j < Ps ; j++){
                         for(i = 0 ; i < Ps ; i++){
@@ -364,14 +387,14 @@ void lowRank(int w, int h, double *in, double *out)
                     for(j = 0 ; j < Ps ; j++){
                         for(i = 0 ; i < K ; i++){
                             for(n = 0 ; n < K ; n++){
-                                XGk[Ps * i + j] += us[Ps * j + n] * vt[c * i + n];
+                                XGi[Ps * i + j] += us[Ps * j + n] * vt[K * i + n];
                             }
                         }
                     }
                     // (15)
                     for(j = 0 ; j < rtPs ; j++){
                         for(i = 0 ; i < rtPs ; i++){
-                            newx[(j0 + j) % h * w + (i0 + i) % w] += XGk[rtPs * j + i];
+                            newx[(j0 + j) % h * w + (i0 + i) % w] += XGi[rtPs * j + i];
                             win[(j0 + j)%h * w + (i0 + i) % w]++;
                         }
                     }
@@ -399,20 +422,25 @@ void lowRank(int w, int h, double *in, double *out)
     free(cpyx);
     free(tmpx);
     free(win);
-    free(Gk);
+    free(Gi);
     free(chk);
     free(err);
     free(ref);
     free(tgt);
-    free(XGk);
-    free(ZGk);
-    free(cpyZGk);
-    free(tmpZGk);
-    free(wgt);
+    free(XGi);
+    free(YGi);
+    free(ph);
+    free(pv);
+  //  free(cpyZGk);
+  //  free(tmpZGk);
+  //  free(wgt);
     free(us);
     free(tmps);
     free(s);
     free(u);
     free(vt);
     free(work);
+    free(lambda);
+    free(lambda_dash);
+    free(lambda_kGi);
 }
