@@ -63,10 +63,10 @@ void z16(int w, int h, double *in, double *out)
     const int K = 60;
     const int Ws = 30; // search range
     const int T = 5;
-    const int L = 7;
-    const int S = 3;   // over lapping length
-    const double alpha = 0.01;
-    const double gamma = 0.2;
+    const int L = 3;
+    const int S = 2;   // over lapping length
+    const double alpha = 8.;
+    const double gamma = 2 * sqrt(2);
 
     if(Ps > K || K > Ws * Ws || S < 0){
         fprintf(stderr, "error : invalid parameter value\n");
@@ -80,8 +80,8 @@ void z16(int w, int h, double *in, double *out)
     //sdot = (double)(Mq[0] + Mq[1] + Mq[2] + Mq[8] + Mq[9] + Mq[10] + Mq[16] + Mq[17] + Mq[18]) / 9.0;
     //simgae = 1.195 * pow(sdot, 0.6394) + 0.9693;
 
-    getL(w, h, in, lhat, 0.25);
-    getU(w, h, in, uhat, 0.25);
+    getL(w, h, in, lhat, 0.5);
+    getU(w, h, in, uhat, 0.5);
 
     const int rtPs = (int)sqrt((double)Ps);
     const int stp = rtPs - S;
@@ -130,26 +130,22 @@ void z16(int w, int h, double *in, double *out)
     lwork = (int)wkopt;
     work = dmalloc(lwork * sizeof(double));
 
-    for(t = 0 , sigmas = sigmae; t < T ; t++){  printf("%d\n", t);
+    for(t = 0 , sigmas = sigmae; t < T ; t++){  printf("t = %d\n", t);
         memcpy(cpyx, x, sizeof(double) * w * h);
         printf("Algorithm1\n");
         // Patch clustering
         for(j0 = 0 ; j0 < h ; j0 += stp){
             //printf("%d\n",j0);
             for(i0 = 0 ; i0 < w ; i0 += stp){
-                //printf("i0\n");
-               // printf("%d\n",i0);
                 memset(chk, 0, sizeof(int ) * Ws * Ws);
                 memset(err, 0, sizeof(double) * Ws * Ws);
 
                 // Copy target
-              //  printf("Copy target\n");
                 for(j = 0 ; j < rtPs ; j++){
                     for(i = 0 ; i < rtPs ; i++){
-                        tgt[imgAcc2(j, i, rtPs, rtPs)] = x[(j0+j)%h * w + (i0+i)%w];
+                        tgt[imgAcc2(j, i, rtPs, rtPs)] = x[(j0+j)%h * w +(i0+i)%w];
                     }
                 }
-               // printf("Block Matching\n");
                 // Block matching
                 for(vj = -Ws/2 ; vj < Ws/2 ; vj++){
                     for(vi = -Ws/2 ; vi < Ws/2 ; vi++){
@@ -178,14 +174,13 @@ void z16(int w, int h, double *in, double *out)
                             if(!chk[imgAcc2(vj, vi, Ws, Ws)] && minE > err[imgAcc2(vj, vi, Ws, Ws)]){
                                 bstvi = vi;
                                 bstvj = vj;
-                                minE = err[imgAcc2(vj, vi, Ws, Ws)];
+                                minE = err[vj*Ws+vi];
                             }
                         }
                     }
                     Ng[imgAcc3(j0/stp, i0/stp, n, nj, ni, K)] = bstvj * Ws + bstvi;
                     chk[imgAcc2(bstvj, bstvi, Ws, Ws)] = 1;
                 }
-                //printf("Gi");
                 // Gi (平均のパッチを作る)
                 for(n = 0 ; n < K ; n++){
                     vi = Ng[K * (j0 / stp * ni + i0 / stp) + n] % Ws;
@@ -196,23 +191,20 @@ void z16(int w, int h, double *in, double *out)
                             for (i = 0; i < rtPs; i++)
                             {
                              //   XGk[n * Bs + (j * rtBs + i)] = cpyx[(j0 + j + vj + h) % h * w + (i0 + i + vi + w) % w];
-                                Gi[imgAcc4(j0/stp, i0/stp, n, j*rtPs+i, nj, ni, K, Ps)] = cpyx[(j0 + j + vj + h) % h * w + (i0 + i + vi + w) % w];
-                                tmpGi[imgAcc2(n, j*rtPs+i, K, Ps)] = cpyx[(j0 + j + vj + h) % h * w + (i0 + i + vi + w) % w];
+                                Gi[imgAcc4(j0/stp, i0/stp, n, j*rtPs+i, nj, ni, K, Ps)] = x[(j0 + j + vj + h) % h * w + (i0 + i + vi + w) % w];
+                                tmpGi[imgAcc2(n, j*rtPs+i, K, Ps)] = x[(j0 + j + vj + h) % h * w + (i0 + i + vi + w) % w];
                             }
                         }
                 }
-                
-                for(n = 0 ; n < K ; n++){
-                    memset(tmpGi, 0, sizeof(double) * Ps);
-                    for(j = 0 ; j < Ps ; j++){
-                        tmpYGi[j] += tmpGi[imgAcc2(n, j, K, Ps)];
-                    }
                 // y_bar
-                    for(j = 0 ; j  < Ps ; j++){
-                        y_bar[imgAcc3(j0/stp, i0/stp, j, nj, ni, Ps)] = tmpYGi[j]/ (double)K;
+                for(j = 0 ; j < Ps ; j++){
+                    memset(tmpGi, 0, sizeof(double) * Ps);
+                    for(n = 0 ; n < K ; n++){
+                        tmpYGi[j] += tmpGi[n*Ps+j];
                     }
+                    y_bar[imgAcc3(j0/stp, i0/stp, j, nj, ni, Ps)] = tmpYGi[j] / K;
                 }
-                 //printf("mu");
+               
                 // μ ph, pv 式(27), (28)
                 double tmpmu = 0.;
                 for(j = 0 ; j < Ps ; j++){
@@ -230,8 +222,10 @@ void z16(int w, int h, double *in, double *out)
                         tmp1 = y_bar[imgAcc4(j0/stp, i0/stp, j, i, nj, ni, rtPs, rtPs)] - mu[imgAcc2(j0/stp, i0/stp, nj, ni)];
                         phNumerator += (y_bar[imgAcc4(j0/stp, i0/stp, j, (i+1)%rtPs, nj, ni, rtPs, rtPs)] 
                                         - mu[imgAcc2(j0/stp, i0/stp, nj, ni)])*(tmp1);
+
                         pvNumerator += (y_bar[imgAcc4(j0/stp, i0/stp, (j+1)%rtPs, i, nj, ni, rtPs, rtPs)] 
                                         - mu[imgAcc2(j0/stp, i0/stp, nj, ni)])*(tmp1);
+
                         Denominator += tmp1 * tmp1;
                     }
                 }
@@ -245,7 +239,6 @@ void z16(int w, int h, double *in, double *out)
                 }
 
                 sigma_xGi[imgAcc2(j0/stp, i0/stp, nj, ni)] = alpha * sqrt(tmp2);
-                // printf("31 32\n");
                 // equ(31), (32)保留
                 // equ(33), (34)
                 tmp1 = 0; 
@@ -254,12 +247,10 @@ void z16(int w, int h, double *in, double *out)
                     //tmp1 += Sigma_nGi[imgAcc3(j0/stp, i0/stp, j, nj, ni, Ps)];
                     tmp1 += Sigma_nGi[j];
                 }
-                //printf("S\n");
                 S2[imgAcc2(j0/stp, i0/stp, nj, ni)] = tmp1;
                 for(j = 0 ; j < Ps ; j++){
-                    omega_Gi[imgAcc3(j0/stp, i0/stp, j, nj, ni, Ps)] = Sigma_nGi[j] / S;
+                    omega_Gi[imgAcc3(j0/stp, i0/stp, j, nj, ni, Ps)] = Sigma_nGi[j] / S2[j0/stp * nj + i0/stp];
                 }
-                //printf("33\n");
                 // (33)
                 tmp1 = 0;
                 for(j = 0 ; j < Ps ; j++){
@@ -270,12 +261,12 @@ void z16(int w, int h, double *in, double *out)
             } // i0
         } //j0
     
-        printf("Algoririthm2\n");
+        printf("Algorithm2\n");
         // Algorithm 2
         memcpy(cpyx, x, sizeof(double) * w * h);
 
         // 特異値分解
-        for(l = 0 ; l < L ; l++){
+        for(l = 0 ; l < 1 ; l++){
             printf("%d\n", l);
             memset(win, 0, sizeof(double) * w * h);
             memset(newx, 0, sizeof(double) * w * h);
@@ -309,26 +300,37 @@ void z16(int w, int h, double *in, double *out)
                     // soft threshold => 
                     sigma2_nGi[imgAcc2(j0/stp, i0/stp, nj, ni)] = sigma_nGi[imgAcc2(j0/stp, i0/stp, nj, ni)] * sigma_nGi[imgAcc2(j0/stp, i0/stp, nj, ni)];
 
+                    for(i = 0 ; i < Ps ; i++){
+                        double tmp = s[i] - 20.0;
+                        if(tmp > 0) tmp = tmp;
+                        else tmp = 0;
+                        tmps[i] = tmp;
+                    }
+
                     // λ 
-                    for(i = 0 ; i < Ps ; i++){
-                        lambda_kGi[i] = s[i];
-                    }
-                    // equ(14)
-                    for(i = 0 ;  i < Ps ; i++){
-                        lambda_dash[i] = sqrt(s[i] - sigma2_nGi[imgAcc2(j0/stp, i0/stp, nj, ni)]);
-                    }
-                    // equ(13)
-                    for(i = 0 ; i < Ps ; i++){
-                        tau_kGi[i] = gamma * sigma2_nGi[imgAcc2(j0/stp, i0/stp, nj, ni)] / sqrt(lambda_dash[i]);
-                    }
-                    // equ(12)
-                    for(i = 0 ; i < Ps ; i++){
-                        if(abs(lambda[i]) > tau_kGi[i]){
-                            tmps[i] = lambda[i] - tau_kGi[i] * 1;
-                        }else if(abs(lambda[i]) <= tau_kGi[i]){
-                            tmps[i] = 0;
-                        }
-                    }
+                    // for(i = 0 ; i < Ps ; i++){
+                    //     lambda_kGi[i] = s[i];
+                    // }
+                    // // equ(14)
+                    // for(i = 0 ;  i < Ps ; i++){
+                    //     lambda_dash[i] = sqrt(s[i] - sigma2_nGi[imgAcc2(j0/stp, i0/stp, nj, ni)]);
+                    // }
+                    // // equ(13)
+                    // for(i = 0 ; i < Ps ; i++){
+                    //     tau_kGi[i] = gamma * sigma2_nGi[imgAcc2(j0/stp, i0/stp, nj, ni)] / sqrt(lambda_dash[i]);
+                    // }
+                    // // equ(12)
+                    // for(i = 0 ; i < Ps ; i++){
+                    //     if(abs(lambda[i]) > tau_kGi[i]){
+                    //         if(lambda[i] > 0){
+                    //         tmps[i] = lambda[i] - tau_kGi[i];
+                    //     }else if(lambda[i] < 0){
+                    //     tmps[i] = lambda[i] + tau_kGi[i];
+                    //     }
+                    // }else if(abs(lambda[i]) <= tau_kGi[i]){
+                    //         tmps[i] = 0;
+                    //     }
+                    // }
 
                     // パッチの再構成 U * D * Vt equ(9)
                     memset(us, 0, sizeof(double) * Ps * K);
@@ -343,7 +345,7 @@ void z16(int w, int h, double *in, double *out)
                     for(j = 0 ; j < Ps ; j++){
                         for(i = 0 ; i < K ; i++){
                             for(n = 0 ; n < K ; n++){
-                                XGi[Ps * i + j] += us[Ps * j + n] * vt[K * i + n];
+                                XGi[Ps * i + j] += us[K * j + n] * vt[K * i + n];
                             }
                         }
                     }
@@ -359,7 +361,7 @@ void z16(int w, int h, double *in, double *out)
             // M = min(Ps, K);
             // omega_B = max(1 - r / M, 1/M) / Z;
             for(i = 0 ; i < w * h ; i++){
-                x[i] = newx[i] / win[i];
+                x[i] = newx[i] / win[i] + 1.0 / 10. * (cpyx[i] - newx[i] / win[i]);;
             }
         } // l
         bdct(w, h, x, Ax);
