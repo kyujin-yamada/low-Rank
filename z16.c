@@ -10,6 +10,7 @@
 #include <time.h>
 #include "com.h"
 #include "dct.h"
+#include "pgm.h"
 #include "qcs.h"
 #include "qtz.h"
 
@@ -20,6 +21,7 @@
 #define imgAcc4(i, j, k, l, maxi, maxj, maxk, maxl) ((i) * (maxj) * (maxk) * (maxl) + (j) * (maxk) * (maxl) + (k) * (maxl) + (l))
 #define dmalloc(a) ((double *)malloc(sizeof(double) * (a)))
 #define imalloc(a) ((int *)malloc(sizeof(int) * (a)))
+#define AVERAGE 0 // 平均取るか
 
 static double Sigma_nGi[64] =
     {
@@ -65,6 +67,7 @@ void z16(int w, int h, double *in, double *out)
     const double omega = 0.25;
     const double alpha = 8.;
     const double gamma = 2 * sqrt(2);
+    const double qstep = 0.05; // 量子化の増加幅
 
     if (Ps > K || K > Ws * Ws || S < 0)
     {
@@ -79,8 +82,8 @@ void z16(int w, int h, double *in, double *out)
     //sdot = (double)(Mq[0] + Mq[1] + Mq[2] + Mq[8] + Mq[9] + Mq[10] + Mq[16] + Mq[17] + Mq[18]) / 9.0;
     //simgae = 1.195 * pow(sdot, 0.6394) + 0.9693;
 
-    getL(w, h, in, lhat, omega);
-    getU(w, h, in, uhat, omega);
+    // getL(w, h, in, lhat, omega);
+    // getU(w, h, in, uhat, omega);
 
     const int rtPs = (int)sqrt((double)Ps);
     const int stp = rtPs - S;
@@ -123,6 +126,14 @@ void z16(int w, int h, double *in, double *out)
     double *vt = dmalloc(K * K);
     double *us = dmalloc(Ps * K);   // u * s
     double *tmps = dmalloc(Ps * K); // temporary s
+    int step = (int)(0.5 / qstep);
+    double *x_i = dmalloc(w * h * step);
+    int count = 0;
+
+    getL(w, h, in, lhat, 0.5);
+    getU(w, h, in, uhat, 0.5);
+
+    // ずらしながら始める
 
     lwork = -1;
     dgesvd_("All", "All", &Ps, &K, YGi, &Ps, s, u, &Ps, vt, &K, &wkopt, &lwork, &info);
@@ -210,215 +221,252 @@ void z16(int w, int h, double *in, double *out)
     }
     for (t = 0, sigmas = sigmae; t < T; t++)
     {
-        printf("t = %d\n", t);
-        memcpy(cpyx, x, sizeof(double) * w * h);
-        printf("Algorithm1\n");
-        for (j0 = 0; j0 < h; j0 += stp)
+
+#if AVERAGE
+        for (double sigma = qstep, count = 0; sigma < 1.0 ; sigma += qstep, count++)
         {
-            for (i0 = 0; i0 < w; i0 += stp)
-            {
-                // y_bar
-                for (j = 0; j < Ps; j++)
-                {
-                    memset(tmpGi, 0, sizeof(double) * Ps);
-                    for (n = 0; n < K; n++)
-                    {
-                        tmpYGi[j] += tmpGi[n * Ps + j];
-                    }
-                    y_bar[imgAcc3(j0 / stp, i0 / stp, j, nj, ni, Ps)] = tmpYGi[j] / K;
-                }
 
-                // μ ph, pv 式(27), (28)
-                double tmpmu = 0.;
-                for (j = 0; j < Ps; j++)
-                {
-                    tmpmu += y_bar[imgAcc3(j0 / stp, i0 / stp, j, nj, ni, Ps)];
-                }
-                mu[imgAcc2(j0 / stp, i0 / stp, nj, ni)] = tmpmu / Ps;
-
-                double tmp1, tmp2;
-                double phNumerator = 0;
-                double pvNumerator = 0;
-                double Denominator = 0;
-
-                for (j = 0; j < rtPs; j++)
-                {
-                    for (i = 0; i < rtPs; i++)
-                    {
-                        tmp1 = y_bar[imgAcc4(j0 / stp, i0 / stp, j, i, nj, ni, rtPs, rtPs)] - mu[imgAcc2(j0 / stp, i0 / stp, nj, ni)];
-                        phNumerator += (y_bar[imgAcc4(j0 / stp, i0 / stp, j, (i + 1) % rtPs, nj, ni, rtPs, rtPs)] - mu[imgAcc2(j0 / stp, i0 / stp, nj, ni)]) * (tmp1);
-
-                        pvNumerator += (y_bar[imgAcc4(j0 / stp, i0 / stp, (j + 1) % rtPs, i, nj, ni, rtPs, rtPs)] - mu[imgAcc2(j0 / stp, i0 / stp, nj, ni)]) * (tmp1);
-
-                        Denominator += tmp1 * tmp1;
-                    }
-                }
-                ph[imgAcc2(j0 / stp, i0 / stp, nj, ni)] = phNumerator / Denominator;
-                pv[imgAcc2(j0 / stp, i0 / stp, nj, ni)] = phNumerator / Denominator;
-                tmp1 = tmp2 = 0;
-                // 式(30) yGi(i, j) - mu
-                for (j = 0; j < Ps; j++)
-                {
-                    tmp1 = y_bar[imgAcc3(j0 / stp, i0 / stp, j, nj, ni, Ps)] - mu[imgAcc2(j0 / stp, i0 / stp, nj, ni)];
-                    tmp2 += tmp1 * tmp1;
-                }
-
-                sigma_xGi[imgAcc2(j0 / stp, i0 / stp, nj, ni)] = alpha * sqrt(tmp2);
-                // equ(31), (32)保留
-                // equ(33), (34)
-                tmp1 = 0;
-                for (j = 0; j < Ps; j++)
-                {
-
-                    //tmp1 += Sigma_nGi[imgAcc3(j0/stp, i0/stp, j, nj, ni, Ps)];
-                    tmp1 += Sigma_nGi[j];
-                }
-                S2[imgAcc2(j0 / stp, i0 / stp, nj, ni)] = tmp1;
-                for (j = 0; j < Ps; j++)
-                {
-                    omega_Gi[imgAcc3(j0 / stp, i0 / stp, j, nj, ni, Ps)] = Sigma_nGi[j] / S2[j0 / stp * nj + i0 / stp];
-                }
-                // (33)
-                tmp1 = 0;
-                for (j = 0; j < Ps; j++)
-                {
-                    tmp1 += omega_Gi[imgAcc3(j0 / stp, i0 / stp, j, nj, ni, Ps)] * Sigma_nGi[j];
-                }
-                //printf("sigma\n");
-                sigma_nGi[imgAcc2(j0 / stp, i0 / stp, nj, ni)] = tmp1;
-            } // i0
-        }     //j0
-
-        printf("Algorithm2\n");
-        // Algorithm 2
-        memcpy(cpyx, x, sizeof(double) * w * h);
-
-        // 特異値分解
-        for (l = 0; l < 1; l++)
-        {
-            printf("%d\n", l);
-            memset(win, 0, sizeof(double) * w * h);
-            memset(newx, 0, sizeof(double) * w * h);
-            memcpy(tmpx, x, sizeof(double) * w * h);
-
+            printf("sigma = %0.2f\n", sigma);
+            getL(w, h, in, lhat, sigma);
+            getU(w, h, in, uhat, sigma);
+#endif
+            printf("t = %d\n", t);
+            memcpy(cpyx, x, sizeof(double) * w * h);
+            printf("Algorithm1\n");
             for (j0 = 0; j0 < h; j0 += stp)
             {
                 for (i0 = 0; i0 < w; i0 += stp)
                 {
-
-                    // Construct XGi
-                    for (n = 0; n < K; n++)
-                    {
-                        vi = Ng[imgAcc3(j0 / stp, i0 / stp, n, nj, ni, K)] % Ws;
-                        vj = (Ng[imgAcc3(j0 / stp, i0 / stp, n, nj, ni, K)] - vi) / Ws;
-                        vi = vi - Ws / 2;
-                        vj = vj - Ws / 2;
-                        for (j = 0; j < rtPs; j++)
-                        {
-                            for (i = 0; i < rtPs; i++)
-                            {
-                                YGi[n * Ps + (j * rtPs + i)] = cpyx[(j0 + j + vj + h) % h * w + (i0 + i + vi + w) % w];
-                                XGi[n * Ps + (j * rtPs + i)] = tmpx[(j0 + j + vj + h) % h * w + (i0 + i + vi + w) % w];
-                            }
-                        }
-                    }
-
-                    double _sigmas = 0.0;
-                    for (i = 0; i < Ps * K; i++)
-                    {
-                        _sigmas += (YGi[i] - XGi[i]) * (YGi[i] - XGi[i]);
-                    }
-                    memcpy(tmpXGi, XGi, sizeof(double) * Ps * K);
-                    // s -> sigma ここでいうλ
-                    dgesvd_("All", "All", &Ps, &K, tmpXGi, &Ps, s, u, &Ps, vt, &K, work, &lwork, &info);
-
-                    // soft threshold =>
-                    sigma2_nGi[imgAcc2(j0 / stp, i0 / stp, nj, ni)] = sigma_nGi[imgAcc2(j0 / stp, i0 / stp, nj, ni)] * sigma_nGi[imgAcc2(j0 / stp, i0 / stp, nj, ni)];
-
-                    // for (i = 0; i < Ps; i++)
-                    // {
-                    //     double tmp = s[i] - 20.0;
-                    //     if (tmp > 0)
-                    //         tmp = tmp;
-                    //     else
-                    //         tmp = 0;
-                    //     tmps[i] = tmp;
-                    // }
-
-                    // equ(14)
-                    for (i = 0; i < Ps; i++)
-                    {
-                        lambda_dash[i] = sqrt(s[i] - sigma2_nGi[i]);
-                    }
-                    // equ(13)
-                    for (i = 0; i < Ps; i++)
-                    {
-                        tau_kGi[i] = gamma * sigma2_nGi[i] / sqrt(lambda_dash[i]);
-                    }
-                    // equ(12)
-                    for (i = 0; i < Ps; i++)
-                    {
-                        if (abs(s[i]) > tau_kGi[i])
-                        {
-                            if (s[i] > 0)
-                                tmps[i] = s[i] - tau_kGi[i];
-                            else if (s[i] = 0)
-                                tmps[i] = s[i];
-
-                            else
-                                tmps[i] = s[i] + tau_kGi[i];
-                        }
-                        else
-                            tmps[i] = 0;
-                    }
-
-                    // パッチの再構成 U * D * Vt equ(9)
-                    memset(us, 0, sizeof(double) * Ps * K);
-                    memset(XGi, 0, sizeof(double) * Ps * K);
-
+                    // y_bar
                     for (j = 0; j < Ps; j++)
                     {
-                        for (i = 0; i < Ps; i++)
+                        memset(tmpGi, 0, sizeof(double) * Ps);
+                        for (n = 0; n < K; n++)
                         {
-                            us[K * j + i] = u[Ps * i + j] * tmps[i];
+                            // tmpYGi[j] += tmpGi[n * Ps + j];
+                            tmpYGi[j] += Gi[imgAcc4(j0 / stp, i0 / stp, j, n, nj, ni, Ps, K)];
                         }
+                        y_bar[imgAcc3(j0 / stp, i0 / stp, j, nj, ni, Ps)] = tmpYGi[j] / K;
                     }
 
+                    // μ ph, pv 式(27), (28)
+                    double tmpmu = 0.;
                     for (j = 0; j < Ps; j++)
                     {
-                        for (i = 0; i < K; i++)
-                        {
-                            for (n = 0; n < K; n++)
-                            {
-                                XGi[Ps * i + j] += us[K * j + n] * vt[K * i + n];
-                            }
-                        }
+                        tmpmu += y_bar[imgAcc3(j0 / stp, i0 / stp, j, nj, ni, Ps)];
                     }
-                    // (15)
+                    mu[imgAcc2(j0 / stp, i0 / stp, nj, ni)] = tmpmu / Ps;
+
+                    double tmp1, tmp2;
+                    double phNumerator = 0;
+                    double pvNumerator = 0;
+                    double Denominator = 0;
+
                     for (j = 0; j < rtPs; j++)
                     {
                         for (i = 0; i < rtPs; i++)
                         {
-                            newx[(j0 + j) % h * w + (i0 + i) % w] += XGi[rtPs * j + i];
-                            win[(j0 + j) % h * w + (i0 + i) % w]++;
+                            tmp1 = y_bar[imgAcc4(j0 / stp, i0 / stp, j, i, nj, ni, rtPs, rtPs)] - mu[imgAcc2(j0 / stp, i0 / stp, nj, ni)];
+                            phNumerator += (y_bar[imgAcc4(j0 / stp, i0 / stp, j, (i + 1) % rtPs, nj, ni, rtPs, rtPs)] - mu[imgAcc2(j0 / stp, i0 / stp, nj, ni)]) * (tmp1);
+
+                            pvNumerator += (y_bar[imgAcc4(j0 / stp, i0 / stp, (j + 1) % rtPs, i, nj, ni, rtPs, rtPs)] - mu[imgAcc2(j0 / stp, i0 / stp, nj, ni)]) * (tmp1);
+
+                            Denominator += tmp1 * tmp1;
                         }
                     }
-                } // j0
-            }     // i0
-            // M = min(Ps, K);
-            // omega_B = max(1 - r / M, 1/M) / Z;
+                    ph[imgAcc2(j0 / stp, i0 / stp, nj, ni)] = phNumerator / Denominator;
+                    pv[imgAcc2(j0 / stp, i0 / stp, nj, ni)] = phNumerator / Denominator;
+                    tmp1 = tmp2 = 0;
+                    // 式(30) yGi(i, j) - mu
+                    for (j = 0; j < Ps; j++)
+                    {
+                        tmp1 = y_bar[imgAcc3(j0 / stp, i0 / stp, j, nj, ni, Ps)] - mu[imgAcc2(j0 / stp, i0 / stp, nj, ni)];
+                        tmp2 += tmp1 * tmp1;
+                    }
+
+                    sigma_xGi[imgAcc2(j0 / stp, i0 / stp, nj, ni)] = alpha * sqrt(tmp2);
+                    // equ(31), (32)保留
+                    // equ(33), (34)
+                    tmp1 = 0;
+                    for (j = 0; j < Ps; j++)
+                    {
+
+                        //tmp1 += Sigma_nGi[imgAcc3(j0/stp, i0/stp, j, nj, ni, Ps)];
+                        tmp1 += Sigma_nGi[j];
+                    }
+                    S2[imgAcc2(j0 / stp, i0 / stp, nj, ni)] = tmp1;
+                    for (j = 0; j < Ps; j++)
+                    {
+                        omega_Gi[imgAcc3(j0 / stp, i0 / stp, j, nj, ni, Ps)] = Sigma_nGi[j] / S2[j0 / stp * nj + i0 / stp];
+                    }
+                    // (33)
+                    tmp1 = 0;
+                    for (j = 0; j < Ps; j++)
+                    {
+                        tmp1 += omega_Gi[imgAcc3(j0 / stp, i0 / stp, j, nj, ni, Ps)] * Sigma_nGi[j];
+                    }
+                    //printf("sigma\n");
+                    sigma_nGi[imgAcc2(j0 / stp, i0 / stp, nj, ni)] = tmp1;
+                } // i0
+            }     //j0
+
+            printf("Algorithm2\n");
+            // Algorithm 2
+            memcpy(cpyx, x, sizeof(double) * w * h);
+
+            // 特異値分解
+            for (l = 0; l < 1; l++)
+            {
+                memset(win, 0, sizeof(double) * w * h);
+                memset(newx, 0, sizeof(double) * w * h);
+                memcpy(tmpx, x, sizeof(double) * w * h);
+
+                for (j0 = 0; j0 < h; j0 += stp)
+                {
+                    for (i0 = 0; i0 < w; i0 += stp)
+                    {
+
+                        // Construct XGi
+                        for (n = 0; n < K; n++)
+                        {
+                            vi = Ng[imgAcc3(j0 / stp, i0 / stp, n, nj, ni, K)] % Ws;
+                            vj = (Ng[imgAcc3(j0 / stp, i0 / stp, n, nj, ni, K)] - vi) / Ws;
+                            vi = vi - Ws / 2;
+                            vj = vj - Ws / 2;
+                            for (j = 0; j < rtPs; j++)
+                            {
+                                for (i = 0; i < rtPs; i++)
+                                {
+                                    YGi[n * Ps + (j * rtPs + i)] = cpyx[(j0 + j + vj + h) % h * w + (i0 + i + vi + w) % w];
+                                    XGi[n * Ps + (j * rtPs + i)] = tmpx[(j0 + j + vj + h) % h * w + (i0 + i + vi + w) % w];
+                                }
+                            }
+                        }
+
+                        double _sigmas = 0.0;
+                        for (i = 0; i < Ps * K; i++)
+                        {
+                            _sigmas += (YGi[i] - XGi[i]) * (YGi[i] - XGi[i]);
+                        }
+                        memcpy(tmpXGi, XGi, sizeof(double) * Ps * K);
+                        // s -> sigma ここでいうλ
+                        dgesvd_("All", "All", &Ps, &K, tmpXGi, &Ps, s, u, &Ps, vt, &K, work, &lwork, &info);
+
+                        // soft threshold =>
+                        sigma2_nGi[imgAcc2(j0 / stp, i0 / stp, nj, ni)] = sigma_nGi[imgAcc2(j0 / stp, i0 / stp, nj, ni)] * sigma_nGi[imgAcc2(j0 / stp, i0 / stp, nj, ni)];
+
+                        // for (i = 0; i < Ps; i++)
+                        // {
+                        //     double tmp = s[i] - 20.0;
+                        //     if (tmp > 0)
+                        //         tmp = tmp;
+                        //     else
+                        //         tmp = 0;
+                        //     tmps[i] = tmp;
+                        // }
+
+                        // equ(14)
+                        for (i = 0; i < Ps; i++)
+                        {
+                            lambda_dash[i] = sqrt(s[i] - sigma2_nGi[i]);
+                        }
+                        // equ(13)
+                        for (i = 0; i < Ps; i++)
+                        {
+                            tau_kGi[i] = gamma * sigma2_nGi[i] / sqrt(lambda_dash[i]);
+                        }
+                        // equ(12)
+                        for (i = 0; i < Ps; i++)
+                        {
+                            if (abs(s[i]) > tau_kGi[i])
+                            {
+                                if (s[i] > 0)
+                                    tmps[i] = s[i] - tau_kGi[i];
+                                else if (s[i] = 0)
+                                    tmps[i] = s[i];
+
+                                else
+                                    tmps[i] = s[i] + tau_kGi[i];
+                            }
+                            else
+                                tmps[i] = 0;
+                        }
+
+                        // パッチの再構成 U * D * Vt equ(9)
+                        memset(us, 0, sizeof(double) * Ps * K);
+                        memset(XGi, 0, sizeof(double) * Ps * K);
+
+                        for (j = 0; j < Ps; j++)
+                        {
+                            for (i = 0; i < Ps; i++)
+                            {
+                                us[K * j + i] = u[Ps * i + j] * tmps[i];
+                            }
+                        }
+
+                        for (j = 0; j < Ps; j++)
+                        {
+                            for (i = 0; i < K; i++)
+                            {
+                                for (n = 0; n < K; n++)
+                                {
+                                    XGi[Ps * i + j] += us[K * j + n] * vt[K * i + n];
+                                }
+                            }
+                        }
+                        // (15)
+                        for (j = 0; j < rtPs; j++)
+                        {
+                            for (i = 0; i < rtPs; i++)
+                            {
+                                newx[(j0 + j) % h * w + (i0 + i) % w] += XGi[rtPs * j + i];
+                                win[(j0 + j) % h * w + (i0 + i) % w]++;
+                            }
+                        }
+                    } // j0
+                }     // i0
+                // M = min(Ps, K);
+                // omega_B = max(1 - r / M, 1/M) / Z;
+                for (i = 0; i < w * h; i++)
+                {
+                    x[i] = newx[i] / win[i] + 1.0 / 10. * (cpyx[i] - newx[i] / win[i]);
+                }
+            } // l
+            bdct(w, h, x, Ax);
             for (i = 0; i < w * h; i++)
             {
-                x[i] = newx[i] / win[i] + 1.0 / 10. * (cpyx[i] - newx[i] / win[i]);
+                Ax[i] = MAX(MIN(Ax[i], uhat[i]), lhat[i]);
             }
-        } // l
-        bdct(w, h, x, Ax);
-        for (i = 0; i < w * h; i++)
+            ibdct(w, h, Ax, x);
+        } //t
+        for (j = 0; j < h; j++)
         {
-            Ax[i] = MAX(MIN(Ax[i], uhat[i]), lhat[i]);
+            for (i = 0; i < w; i++)
+            {
+                x_i[(int)count * w * h + j * w + i] = x[imgAcc2(j, i, h, w)];
+            }
         }
-        ibdct(w, h, Ax, x);
-    }
+#if AVERAGE
+    } //sigma
+    printf("a\n");
+    for (int k = 0; i < count; k++)
+    {
+        for (j = 0; j < h; j++)
+        {
+            for (i = 0; i < w; i++)
+            {
+                x[j * w + i] += x_i[k * w * h + j * w + i];
+            }
+        }
+        for (j = 0; j < h; j++)
+        {
+            for (i = 0; i < w; i++)
+            {
+                x[j * w + i] /= (double)count;
+            }
+        }
+    } // k
+#endif
     memcpy(out, x, sizeof(double) * w * h);
     free(y);
     free(x);
@@ -455,4 +503,26 @@ void z16(int w, int h, double *in, double *out)
     free(lambda_dash);
     free(lambda_kGi);
     free(tmpYGi);
+}
+
+double mse(PGM src, PGM dst)
+{
+    int i;
+    double e;
+
+    if (src.width != dst.width || src.height != dst.height)
+    {
+        fprintf(stderr, "error: src and dst must be of same size\n ");
+        exit(EXIT_FAILURE);
+    }
+
+    const int w = src.width;
+    const int h = src.height;
+
+    for (i = 0, e = 0.0; i < w * h; i++)
+    {
+        e += (src.data[i] - dst.data[i]) * (src.data[i] - dst.data[i]);
+    }
+
+    return e / (double)(w * h);
 }
