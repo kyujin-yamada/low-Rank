@@ -34,10 +34,11 @@ static double Sigma_nGi[64] =
         0.127, 0.099, 0.076, 0.056, 0.043, 0.035, 0.030, 0.027,
         0.112, 0.088, 0.068, 0.050, 0.038, 0.031, 0.026, 0.024};
 
-void z16(int w, int h, double *in, double *out)
+void z16(int w, int h, double *in, double *out, PGM ori)
 {
     int i, j, i0, j0, vi, vj, ni, nj, l, n, t;
 
+    PGM dst, src = ori;
     //int Mq[64];
     //double sdot = 0.0;
     double sigmae = 0.0;
@@ -45,6 +46,7 @@ void z16(int w, int h, double *in, double *out)
 
     double *y = dmalloc(w * h); // JPEG DCT係数
     double *x = dmalloc(w * h); // JPEG
+    double *xOld = dmalloc(w * h);
     double *newx = dmalloc(w * h);
     double *cpyx = dmalloc(w * h);
     double *win = dmalloc(w * h);
@@ -54,6 +56,7 @@ void z16(int w, int h, double *in, double *out)
     double *tmpx = (double *)malloc(sizeof(double) * w * h);
 
     // y <- JPEGDCT係数
+  
     ibdct(w, h, in, y);
     //  cpyQg(Mq);
 
@@ -61,13 +64,15 @@ void z16(int w, int h, double *in, double *out)
     const int Ps = 36; // patch size
     const int K = 60;
     const int Ws = 30; // search range
-    const int T = 5;
+    const int T = 50;
     const int L = 3;
     const int S = 2; // over lapping length
     const double omega = 0.25;
     const double alpha = 8.;
     const double gamma = 2 * sqrt(2);
     const double qstep = 0.05; // 量子化の増加幅
+
+    double MAD; // 収束条件に使う
 
     if (Ps > K || K > Ws * Ws || S < 0)
     {
@@ -130,8 +135,8 @@ void z16(int w, int h, double *in, double *out)
     double *x_i = dmalloc(w * h * step);
     int count = 0;
 
-    getL(w, h, in, lhat, 0.5);
-    getU(w, h, in, uhat, 0.5);
+    getL(w, h, in, lhat, 0.35);
+    getU(w, h, in, uhat, 0.35);
 
     // ずらしながら始める
 
@@ -221,15 +226,16 @@ void z16(int w, int h, double *in, double *out)
     }
     for (t = 0, sigmas = sigmae; t < T; t++)
     {
-
 #if AVERAGE
-        for (double sigma = qstep, count = 0; sigma < 1.0 ; sigma += qstep, count++)
+        for (double sigma = qstep, count = 0; sigma < 1.0; sigma += qstep, count++)
         {
 
             printf("sigma = %0.2f\n", sigma);
             getL(w, h, in, lhat, sigma);
             getU(w, h, in, uhat, sigma);
 #endif
+            // xold作る
+            memcpy(xOld, x, sizeof(double) * w * h);
             printf("t = %d\n", t);
             memcpy(cpyx, x, sizeof(double) * w * h);
             printf("Algorithm1\n");
@@ -382,7 +388,7 @@ void z16(int w, int h, double *in, double *out)
                             {
                                 if (s[i] > 0)
                                     tmps[i] = s[i] - tau_kGi[i];
-                                else if (s[i] = 0)
+                                else if (s[i] == 0)
                                     tmps[i] = s[i];
 
                                 else
@@ -438,7 +444,19 @@ void z16(int w, int h, double *in, double *out)
                 Ax[i] = MAX(MIN(Ax[i], uhat[i]), lhat[i]);
             }
             ibdct(w, h, Ax, x);
+
+            // 収束条件
+            double tmp = 0;
+            for(j = 0 ; j < h * w; j++){
+                    tmp += abs(x[j] - xOld[j]);
+            }
+            MAD = tmp / (double)(w * h);
+
+            if(MAD < 0.01) break;
+
         } //t
+
+#if AVERAGE
         for (j = 0; j < h; j++)
         {
             for (i = 0; i < w; i++)
@@ -446,7 +464,6 @@ void z16(int w, int h, double *in, double *out)
                 x_i[(int)count * w * h + j * w + i] = x[imgAcc2(j, i, h, w)];
             }
         }
-#if AVERAGE
     } //sigma
     printf("a\n");
     for (int k = 0; i < count; k++)
@@ -468,6 +485,12 @@ void z16(int w, int h, double *in, double *out)
     } // k
 #endif
     memcpy(out, x, sizeof(double) * w * h);
+    // リミッタ処理
+    for (i = 0; i < w * h; i++)
+    {
+        dst.data[i] = (int)(MAX(MIN(((int)(x[i] + 0.5)), 255), 0));
+    }
+    printf("%f\n", src, dst);
     free(y);
     free(x);
     free(newx);
