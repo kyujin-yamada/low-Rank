@@ -22,10 +22,10 @@
 #define dmalloc(a) ((double *)malloc(sizeof(double) * (a)))
 #define imalloc(a) ((int *)malloc(sizeof(int) * (a)))
 
-#define AVERAGE 1  // 平均取るか (提案手法)
-#define SIGMA 1    // σ探索
+#define AVERAGE 0  // 平均取るか (提案手法)
+#define SIGMA 0    // σ探索
 #define INI_JPEG 0 // xの初期位置をJPEGにする
-#define SIG 0.35
+#define SIG 0.0
 #define STP 2
 
 static double Sigma_nGi[64] =
@@ -152,12 +152,15 @@ void z16(int w, int h, double *in, double *out, PGM ori)
     sigma = SIG;
     getL(w, h, in, lhat, sigma);
     getU(w, h, in, uhat, sigma);
-
     maxMse = 0.01;
     minMse = 100000;
     maxSigma = 0.;
     minSigma = 1.0;
-
+    double tmpMAD = 0.;
+    for(i = 0 ; i < w * h ; i++){
+        tmpMAD += x[i];
+    }
+    MAD = tmpMAD / (double)(w * h);
     // ずらしながら始める
 
     lwork = -1;
@@ -346,7 +349,7 @@ void z16(int w, int h, double *in, double *out, PGM ori)
             memcpy(cpyx, x, sizeof(double) * w * h);
 
             // 特異値分解
-            for (l = 0; l < 1; l++)
+            for (l = 0; l < 2; l++)
             {
                 memset(win, 0, sizeof(double) * w * h);
                 memset(newx, 0, sizeof(double) * w * h);
