@@ -26,7 +26,7 @@
 #define SIGMA 1    // σ探索
 #define INI_JPEG 0 // xの初期位置をJPEGにする
 #define SIG 0.35
-#define STP 4
+#define STP 2
 
 static double Sigma_nGi[64] =
     {
@@ -247,7 +247,7 @@ void z16(int w, int h, double *in, double *out, PGM ori)
     }
 #if SIGMA
     for (sigma = 0., count = 0; sigma < 0.5; sigma += (0.5 / (double)STP), count++)
-    {
+    { printf("roop %d\n", count);
 #if INI_JPEG
         memcpy(x, y, sizeof(double) * w * h);
 #endif
@@ -263,7 +263,7 @@ void z16(int w, int h, double *in, double *out, PGM ori)
             memcpy(xOld, x, sizeof(double) * w * h);
             printf("t = %d\n", t);
             memcpy(cpyx, x, sizeof(double) * w * h);
-            // printf("Algorithm1\n");
+             printf("Algorithm1\n");
             for (j0 = 0; j0 < h; j0 += stp)
             {
                 for (i0 = 0; i0 < w; i0 += stp)
@@ -341,7 +341,7 @@ void z16(int w, int h, double *in, double *out, PGM ori)
                 } // i0
             }     //j0
 
-            //  printf("Algorithm2\n");
+              printf("Algorithm2\n");
             // Algorithm 2
             memcpy(cpyx, x, sizeof(double) * w * h);
 
@@ -482,13 +482,12 @@ void z16(int w, int h, double *in, double *out, PGM ori)
                 break;
 
         } //t
-
 #if AVERAGE
         for (j = 0; j < h; j++)
         {
             for (i = 0; i < w; i++)
             {
-                x_i[(int)count * w * h + j * w + i] = x[imgAcc2(j, i, h, w)];
+                x_i[STP * w * h + j * w + i] = x[imgAcc2(j, i, h, w)];
             }
         }
 #endif
@@ -528,7 +527,7 @@ void z16(int w, int h, double *in, double *out, PGM ori)
         {
             for (i = 0; i < w; i++)
             {
-                x[j * w + i] /= (double)count;
+                x[j * w + i] /= (double)STP;
             }
         }
     } // k
