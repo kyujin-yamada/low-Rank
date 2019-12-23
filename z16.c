@@ -21,7 +21,12 @@
 #define imgAcc4(i, j, k, l, maxi, maxj, maxk, maxl) ((i) * (maxj) * (maxk) * (maxl) + (j) * (maxk) * (maxl) + (k) * (maxl) + (l))
 #define dmalloc(a) ((double *)malloc(sizeof(double) * (a)))
 #define imalloc(a) ((int *)malloc(sizeof(int) * (a)))
-#define AVERAGE 0 // 平均取るか
+
+#define AVERAGE 1  // 平均取るか (提案手法)
+#define SIGMA 1    // σ探索
+#define INI_JPEG 0 // xの初期位置をJPEGにする
+#define SIG 0.35
+#define STP 4
 
 static double Sigma_nGi[64] =
     {
@@ -34,6 +39,9 @@ static double Sigma_nGi[64] =
         0.127, 0.099, 0.076, 0.056, 0.043, 0.035, 0.030, 0.027,
         0.112, 0.088, 0.068, 0.050, 0.038, 0.031, 0.026, 0.024};
 
+double mse(PGM src, PGM dst);
+double psnr(PGM src, PGM dst);
+
 void z16(int w, int h, double *in, double *out, PGM ori)
 {
     int i, j, i0, j0, vi, vj, ni, nj, l, n, t;
@@ -41,6 +49,7 @@ void z16(int w, int h, double *in, double *out, PGM ori)
     PGM dst, src = ori;
     //int Mq[64];
     //double sdot = 0.0;
+    pgmcreate(&dst, w, h);
     double sigmae = 0.0;
     double sigmas = 0.0;
 
@@ -55,8 +64,11 @@ void z16(int w, int h, double *in, double *out, PGM ori)
     double *uhat = dmalloc(w * h);
     double *tmpx = (double *)malloc(sizeof(double) * w * h);
 
+    double MSE = 0;
+    double minMse, maxMse, maxSigma, minSigma;
+
     // y <- JPEGDCT係数
-  
+
     ibdct(w, h, in, y);
     //  cpyQg(Mq);
 
@@ -133,10 +145,18 @@ void z16(int w, int h, double *in, double *out, PGM ori)
     double *tmps = dmalloc(Ps * K); // temporary s
     int step = (int)(0.5 / qstep);
     double *x_i = dmalloc(w * h * step);
+    double sigma;
     int count = 0;
 
-    getL(w, h, in, lhat, 0.35);
-    getU(w, h, in, uhat, 0.35);
+    // initialize
+    sigma = SIG;
+    getL(w, h, in, lhat, sigma);
+    getU(w, h, in, uhat, sigma);
+
+    maxMse = 0.01;
+    minMse = 100000;
+    maxSigma = 0.;
+    minSigma = 1.0;
 
     // ずらしながら始める
 
@@ -145,6 +165,7 @@ void z16(int w, int h, double *in, double *out, PGM ori)
     lwork = (int)wkopt;
     work = dmalloc(lwork * sizeof(double));
 
+    printf("patch clustering\n");
     // Patch clustering
     for (j0 = 0; j0 < h; j0 += stp)
     {
@@ -224,21 +245,25 @@ void z16(int w, int h, double *in, double *out, PGM ori)
             }
         }
     }
-    for (t = 0, sigmas = sigmae; t < T; t++)
+#if SIGMA
+    for (sigma = 0., count = 0; sigma < 0.5; sigma += (0.5 / (double)STP), count++)
     {
-#if AVERAGE
-        for (double sigma = qstep, count = 0; sigma < 1.0; sigma += qstep, count++)
+#if INI_JPEG
+        memcpy(x, y, sizeof(double) * w * h);
+#endif
+
+        printf("sigma = %0.2f\n", sigma);
+        getL(w, h, in, lhat, sigma);
+        getU(w, h, in, uhat, sigma);
+#endif
+        for (t = 0, sigmas = sigmae; t < T; t++)
         {
 
-            printf("sigma = %0.2f\n", sigma);
-            getL(w, h, in, lhat, sigma);
-            getU(w, h, in, uhat, sigma);
-#endif
             // xold作る
             memcpy(xOld, x, sizeof(double) * w * h);
             printf("t = %d\n", t);
             memcpy(cpyx, x, sizeof(double) * w * h);
-            printf("Algorithm1\n");
+            // printf("Algorithm1\n");
             for (j0 = 0; j0 < h; j0 += stp)
             {
                 for (i0 = 0; i0 < w; i0 += stp)
@@ -316,7 +341,7 @@ void z16(int w, int h, double *in, double *out, PGM ori)
                 } // i0
             }     //j0
 
-            printf("Algorithm2\n");
+            //  printf("Algorithm2\n");
             // Algorithm 2
             memcpy(cpyx, x, sizeof(double) * w * h);
 
@@ -447,12 +472,14 @@ void z16(int w, int h, double *in, double *out, PGM ori)
 
             // 収束条件
             double tmp = 0;
-            for(j = 0 ; j < h * w; j++){
-                    tmp += abs(x[j] - xOld[j]);
+            for (j = 0; j < h * w; j++)
+            {
+                tmp += abs(x[j] - xOld[j]);
             }
             MAD = tmp / (double)(w * h);
 
-            if(MAD < 0.01) break;
+            if (MAD < 0.001)
+                break;
 
         } //t
 
@@ -464,8 +491,30 @@ void z16(int w, int h, double *in, double *out, PGM ori)
                 x_i[(int)count * w * h + j * w + i] = x[imgAcc2(j, i, h, w)];
             }
         }
+#endif
+#if SIGMA
+        for (i = 0; i < w * h; i++)
+        {
+            dst.data[i] = (int)(MAX(MIN(((int)(x[i] + 0.5)), 255), 0));
+        }
+        MSE = psnr(ori, dst); // MSEじゃなくてPSNRのほうで良くなったので　MSE -> PSNR
+        printf("psnr = %5.2f[dB]\n", psnr(ori, dst));
+
+        // 最大のσと最小のσを求める
+        if (maxMse < MSE)
+        {
+            maxMse = MSE;
+            maxSigma = sigma;
+        }
+        if (MSE < minMse)
+        {
+            minMse = MSE;
+            minSigma = sigma;
+        }
+
     } //sigma
-    printf("a\n");
+#endif
+#if AVERAGE
     for (int k = 0; i < count; k++)
     {
         for (j = 0; j < h; j++)
@@ -490,7 +539,10 @@ void z16(int w, int h, double *in, double *out, PGM ori)
     {
         dst.data[i] = (int)(MAX(MIN(((int)(x[i] + 0.5)), 255), 0));
     }
-    printf("%f\n", src, dst);
+    printf("sigma=%5.2f\n", sigma);
+    printf("psnr = %5.2f[dB]\n", psnr(ori, dst));
+    printf("(minpsnr, maxpsnr) = (%5.4f, %5.4f)\n", minMse, maxMse);
+    printf("(minSig, maxSig) = (%5.4f, %5.4f)\n", minSigma, maxSigma);
     free(y);
     free(x);
     free(newx);
